@@ -1,0 +1,59 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ─────────────────────────────────────────────────────────────
+    // WAITLIST — no client access, ever.
+    // All writes go through the server via Admin SDK (bypasses rules).
+    // ─────────────────────────────────────────────────────────────
+    match /waitlist/{entry} {
+      allow read, write: if false;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // IDEAS
+    // ─────────────────────────────────────────────────────────────
+    match /ideas/{ideaId} {
+
+      // Any authenticated user can read ideas
+      allow read: if request.auth != null;
+
+      // Any authenticated user can create an idea,
+      // but authorId must match their own UID (prevents spoofing)
+      allow create: if request.auth != null
+                    && request.resource.data.authorId == request.auth.uid
+                    && request.resource.data.title is string
+                    && request.resource.data.title.size() > 0
+                    && request.resource.data.title.size() <= 120;
+
+      // Updates are only allowed via the Admin SDK (Route Handler transactions).
+      // Client SDK cannot update ideas — this blocks any attempt to manually
+      // set voteCount or change authorId from devtools.
+      allow update: if false;
+
+      // Only the idea's original author can delete their own idea
+      allow delete: if request.auth != null
+                    && resource.data.authorId == request.auth.uid;
+
+      // ─────────────────────────────────────────────────────────
+      // VOTES — subcollection keyed by userId
+      // doc ID = userId makes double-voting structurally impossible.
+      // ─────────────────────────────────────────────────────────
+      match /votes/{userId} {
+
+        // Authenticated users can read votes (to check their own vote status)
+        allow read: if request.auth != null;
+
+        // A user can only create their own vote doc, and only if one doesn't
+        // already exist. The !exists() check enforces the one-vote-per-user
+        // rule at the database level — bypassing the UI is not enough.
+        allow create: if request.auth != null
+                      && userId == request.auth.uid
+                      && !exists(/databases/$(database)/documents/ideas/$(ideaId)/votes/$(request.auth.uid));
+
+        // No one can update or delete votes, ever.
+        allow update, delete: if false;
+      }
+    }
+  }
+}

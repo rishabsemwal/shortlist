@@ -15,7 +15,7 @@ import {
   signOut as firebaseSignOut,
   onAuthStateChanged,
 } from "firebase/auth";
-import { auth } from "@/lib/firebase-client";
+import { getClientAuth } from "@/lib/firebase-client";
 
 interface AuthContextValue {
   user: User | null;
@@ -30,22 +30,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Stable listener — set up once, never re-subscribes on re-renders
   useEffect(() => {
+    const auth = getClientAuth();
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
       setUser(firebaseUser);
       setLoading(false);
     });
     return () => unsubscribe();
-  }, []); // empty deps — intentional
+  }, []);
 
   const signInWithGoogle = useCallback(async () => {
     const provider = new GoogleAuthProvider();
-    await signInWithPopup(auth, provider);
+    await signInWithPopup(getClientAuth(), provider);
   }, []);
 
   const signOut = useCallback(async () => {
-    await firebaseSignOut(auth);
+    await firebaseSignOut(getClientAuth());
   }, []);
 
   return (
