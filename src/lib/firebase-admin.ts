@@ -18,7 +18,7 @@ export function getAdminApp(): App {
 
   if (!serviceAccountJson) {
     _app = initializeApp({
-      projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "shortlist-48ef1",
+      projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "siempi-assignment-rishabh",
     });
     return _app;
   }
@@ -32,7 +32,7 @@ export function getAdminApp(): App {
   } catch (err) {
     console.warn("[firebase-admin] Service account parse failed:", err);
     _app = initializeApp({
-      projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "shortlist-48ef1",
+      projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "siempi-assignment-rishabh",
     });
     return _app;
   }
