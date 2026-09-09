@@ -4,33 +4,82 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 
+type AuthMode = "signin" | "signup";
+
 export default function SignInPage() {
   const { user, loading, signInWithGoogle } = useAuth();
   const router = useRouter();
-  const [signingIn, setSigningIn] = useState(false);
+  const [mode, setMode] = useState<AuthMode>("signin");
+  const [processing, setProcessing] = useState(false);
   const [error, setError] = useState("");
+  const [statusMessage, setStatusMessage] = useState<{
+    type: "info" | "success";
+    text: string;
+  } | null>(null);
 
-  // Redirect already-signed-in users to board
+  // Redirect already-signed-in users to board (unless currently showing feedback message)
   useEffect(() => {
-    if (!loading && user) {
+    if (!loading && user && !processing && !statusMessage) {
       router.replace("/board");
     }
-  }, [user, loading, router]);
+  }, [user, loading, processing, statusMessage, router]);
 
-  const handleGoogleSignIn = async () => {
+  const handleGoogleAuth = async () => {
     setError("");
-    setSigningIn(true);
+    setStatusMessage(null);
+    setProcessing(true);
+
     try {
-      await signInWithGoogle();
-      // onAuthStateChanged will trigger and useEffect above will redirect
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Sign-in failed. Please try again.";
-      // Suppress "popup closed" errors — user closed the popup intentionally
-      if (!message.includes("popup-closed") && !message.includes("cancelled")) {
-        setError("Sign-in failed. Please try again.");
+      const { isNewUser } = await signInWithGoogle();
+
+      if (mode === "signin") {
+        // User clicked "Sign In"
+        if (isNewUser) {
+          // They don't have an existing account yet!
+          setStatusMessage({
+            type: "info",
+            text: "No existing account found with this email. We've automatically created your account via Google Sign Up! Redirecting to board…",
+          });
+        } else {
+          setStatusMessage({
+            type: "success",
+            text: "Welcome back! Signing you in…",
+          });
+        }
+      } else {
+        // User clicked "Sign Up"
+        if (isNewUser) {
+          setStatusMessage({
+            type: "success",
+            text: "Account created successfully! Welcome to Shortlist. Redirecting…",
+          });
+        } else {
+          setStatusMessage({
+            type: "info",
+            text: "You already have an active account with this email! Signing you in directly…",
+          });
+        }
       }
-    } finally {
-      setSigningIn(false);
+
+      // Allow user to read the message briefly, then redirect to board
+      setTimeout(() => {
+        router.replace("/board");
+      }, 1800);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "";
+      if (message.includes("popup-closed") || message.includes("cancelled")) {
+        // User closed popup
+        setProcessing(false);
+        return;
+      }
+      if (message.includes("unauthorized-domain")) {
+        setError(
+          "Domain not authorized. Please add shortlist-ashy.vercel.app to Firebase Console → Authentication → Settings → Authorized Domains."
+        );
+      } else {
+        setError(message || "Authentication failed. Please try again.");
+      }
+      setProcessing(false);
     }
   };
 
@@ -42,6 +91,8 @@ export default function SignInPage() {
       </div>
     );
   }
+
+  const isSignIn = mode === "signin";
 
   return (
     <div className="signin-page">
@@ -59,20 +110,60 @@ export default function SignInPage() {
           <span className="signin-logo-name">Shortlist</span>
         </div>
 
-        <h1 className="signin-title">Welcome back</h1>
-        <p className="signin-subtitle">
-          Sign in to post ideas, vote, and shape the roadmap.
-        </p>
+        {/* Tab Switcher: Sign In vs Sign Up */}
+        <div className="auth-tabs" role="tablist" aria-label="Authentication Options">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={isSignIn}
+            className={`auth-tab ${isSignIn ? "active" : ""}`}
+            onClick={() => {
+              setMode("signin");
+              setError("");
+              setStatusMessage(null);
+            }}
+          >
+            <span>🔑</span> Sign In
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={!isSignIn}
+            className={`auth-tab ${!isSignIn ? "active" : ""}`}
+            onClick={() => {
+              setMode("signup");
+              setError("");
+              setStatusMessage(null);
+            }}
+          >
+            <span>✨</span> Sign Up
+          </button>
+        </div>
 
-        {/* Google Sign-In Button */}
+        {/* Dynamic Header & Badge */}
+        <div style={{ textAlign: "center", marginBottom: "1.2rem" }}>
+          <div className="auth-badge">
+            {isSignIn ? "Existing Users" : "New Accounts"}
+          </div>
+          <h1 className="signin-title">
+            {isSignIn ? "Welcome back" : "Create your account"}
+          </h1>
+          <p className="signin-subtitle">
+            {isSignIn
+              ? "Sign in to post ideas, vote, and follow product updates."
+              : "Sign up to start proposing features and shaping the roadmap. (1 account per email address)."}
+          </p>
+        </div>
+
+        {/* Google Auth Button */}
         <button
-          id="google-signin-btn"
+          id="google-auth-btn"
           className="btn-google"
-          onClick={handleGoogleSignIn}
-          disabled={signingIn}
-          aria-label="Sign in with Google"
+          onClick={handleGoogleAuth}
+          disabled={processing}
+          aria-label={isSignIn ? "Sign in with Google" : "Sign up with Google"}
         >
-          {signingIn ? (
+          {processing ? (
             <span className="spinner" style={{ borderTopColor: "var(--text-secondary)" }} />
           ) : (
             /* Google G icon */
@@ -95,8 +186,25 @@ export default function SignInPage() {
               />
             </svg>
           )}
-          {signingIn ? "Signing in…" : "Continue with Google"}
+          {processing
+            ? isSignIn
+              ? "Signing in…"
+              : "Setting up account…"
+            : isSignIn
+            ? "Sign in with Google"
+            : "Sign up with Google"}
         </button>
+
+        {/* Status Message (e.g., existing vs new user notification) */}
+        {statusMessage && (
+          <div
+            className={`alert ${statusMessage.type === "success" ? "alert-success" : "alert-info"}`}
+            style={{ marginTop: "1rem" }}
+            role="status"
+          >
+            {statusMessage.text}
+          </div>
+        )}
 
         {/* Error */}
         {error && (
@@ -109,8 +217,55 @@ export default function SignInPage() {
           <span>or</span>
         </div>
 
+        {/* Bottom Mode Switcher */}
         <p style={{ fontSize: "0.82rem", color: "var(--text-muted)", textAlign: "center" }}>
-          Don&apos;t have an account? Google handles everything — just click above.
+          {isSignIn ? (
+            <>
+              Don&apos;t have an account?{" "}
+              <button
+                type="button"
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: "var(--brand-violet-light)",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  padding: 0,
+                  textDecoration: "underline",
+                }}
+                onClick={() => {
+                  setMode("signup");
+                  setError("");
+                  setStatusMessage(null);
+                }}
+              >
+                Sign up here
+              </button>
+            </>
+          ) : (
+            <>
+              Already registered?{" "}
+              <button
+                type="button"
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: "var(--brand-violet-light)",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  padding: 0,
+                  textDecoration: "underline",
+                }}
+                onClick={() => {
+                  setMode("signin");
+                  setError("");
+                  setStatusMessage(null);
+                }}
+              >
+                Sign in to your account
+              </button>
+            </>
+          )}
         </p>
       </div>
     </div>

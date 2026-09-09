@@ -26,10 +26,15 @@ service cloud.firestore {
                     && request.resource.data.title.size() > 0
                     && request.resource.data.title.size() <= 120;
 
-      // Updates are only allowed via the Admin SDK (Route Handler transactions).
-      // Client SDK cannot update ideas — this blocks any attempt to manually
-      // set voteCount or change authorId from devtools.
-      allow update: if false;
+      // Allow the author to edit their own idea's title and description.
+      // voteCount and authorId cannot be changed (prevents tampering).
+      allow update: if request.auth != null
+                    && resource.data.authorId == request.auth.uid
+                    && request.resource.data.authorId == resource.data.authorId
+                    && request.resource.data.voteCount == resource.data.voteCount
+                    && request.resource.data.title is string
+                    && request.resource.data.title.size() > 0
+                    && request.resource.data.title.size() <= 120;
 
       // Only the idea's original author can delete their own idea
       allow delete: if request.auth != null
@@ -54,6 +59,14 @@ service cloud.firestore {
         // No one can update or delete votes, ever.
         allow update, delete: if false;
       }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // USERS — profile records (1 user account per UID/email)
+    // ─────────────────────────────────────────────────────────────
+    match /users/{userId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
     }
   }
 }
