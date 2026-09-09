@@ -11,6 +11,13 @@ function isValidEmail(email: string): boolean {
 
 export async function POST(request: NextRequest) {
   try {
+    if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
+      return NextResponse.json(
+        { error: "Server Admin SDK not configured." },
+        { status: 503 }
+      );
+    }
+
     const body = await request.json();
     const email: unknown = body?.email;
 

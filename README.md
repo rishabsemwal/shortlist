@@ -8,7 +8,7 @@ A feature-voting board built with **Next.js 14 (App Router)**, **TypeScript**, *
 
 ## Live Demo
 
-[https://shortlist-yourname.vercel.app](https://shortlist-yourname.vercel.app) ← replace with your Vercel alias
+[https://shortlist-ashy.vercel.app](https://shortlist-ashy.vercel.app)
 
 ---
 
@@ -21,7 +21,7 @@ A feature-voting board built with **Next.js 14 (App Router)**, **TypeScript**, *
 ### 1. Clone & install
 
 ```bash
-git clone https://github.com/your-username/shortlist.git
+git clone https://github.com/rishabsemwal/shortlist.git
 cd shortlist
 npm install
 ```
