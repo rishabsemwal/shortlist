@@ -11,6 +11,13 @@ export async function POST(
   try {
     const { ideaId } = await params;
 
+    if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
+      return NextResponse.json(
+        { error: "Admin SDK not configured on server" },
+        { status: 503 }
+      );
+    }
+
     // 1. Verify Firebase ID token from Authorization header
     const authHeader = request.headers.get("Authorization");
     if (!authHeader?.startsWith("Bearer ")) {

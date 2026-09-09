@@ -1,12 +1,11 @@
 "use client";
 
-import { useState, useEffect, FormEvent } from "react";
+import { useState, useEffect } from "react";
 import {
   doc,
   deleteDoc,
   getDoc,
-  updateDoc,
-  serverTimestamp,
+  runTransaction,
 } from "firebase/firestore";
 import { getClientDb } from "@/lib/firebase-client";
 import { useAuth } from "@/context/AuthContext";
@@ -34,14 +33,7 @@ export default function IdeaCard({ idea }: IdeaCardProps) {
   const [deleting, setDeleting] = useState(false);
   const [localVoteCount, setLocalVoteCount] = useState(idea.voteCount);
 
-  // Author Edit State
-  const [isEditing, setIsEditing] = useState(false);
-  const [editTitle, setEditTitle] = useState(idea.title);
-  const [editBody, setEditBody] = useState(idea.body ?? "");
-  const [savingEdit, setSavingEdit] = useState(false);
-  const [editError, setEditError] = useState("");
-
-  // Toast notifications (for vote and edit)
+  // Toast notifications (for vote and feedback)
   const [toastMessage, setToastMessage] = useState<{
     title: string;
     desc: string;
@@ -49,14 +41,10 @@ export default function IdeaCard({ idea }: IdeaCardProps) {
 
   const isOwner = user?.uid === idea.authorId;
 
-  // Keep local vote count and title/body in sync with real-time Firestore updates
+  // Keep local vote count in sync with real-time Firestore updates
   useEffect(() => {
     setLocalVoteCount(idea.voteCount);
-    if (!isEditing) {
-      setEditTitle(idea.title);
-      setEditBody(idea.body ?? "");
-    }
-  }, [idea.voteCount, idea.title, idea.body, isEditing]);
+  }, [idea.voteCount]);
 
   // Check if current user has already voted on this idea
   useEffect(() => {
@@ -81,8 +69,17 @@ export default function IdeaCard({ idea }: IdeaCardProps) {
   }, [idea.id, user?.uid]);
 
   const handleVote = async () => {
-    // If user is not logged in, already voting, or already voted, prevent any action
-    if (!user || voting || hasVoted) return;
+    // If user is not logged in, show prompt
+    if (!user) {
+      setToastMessage({
+        title: "Sign in required",
+        desc: "Please sign in with Google to upvote ideas.",
+      });
+      setTimeout(() => setToastMessage(null), 3800);
+      return;
+    }
+
+    if (voting || hasVoted) return;
 
     setVoting(true);
     // Optimistically update UI: show as voted, increment count & show popup message
@@ -98,6 +95,7 @@ export default function IdeaCard({ idea }: IdeaCardProps) {
     }, 3800);
 
     try {
+      // 1. First attempt: Server API Route (Admin SDK)
       const idToken = await user.getIdToken();
       const res = await fetch(`/api/ideas/${idea.id}/vote`, {
         method: "POST",
@@ -106,58 +104,45 @@ export default function IdeaCard({ idea }: IdeaCardProps) {
         },
       });
 
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        // 409 means user had already voted server-side
-        if (res.status === 409 || data.error === "Already voted") {
+      if (res.ok) {
+        return; // Success via Admin SDK
+      }
+
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 409 || data.error === "Already voted") {
+        return; // Already voted is fine
+      }
+
+      // 2. Fallback: If server route fails (e.g. Vercel env not set yet), use direct client Firestore transaction
+      console.warn("API vote returned non-200, falling back to direct Firestore transaction...");
+      await runTransaction(getClientDb(), async (tx) => {
+        const ideaRef = doc(getClientDb(), "ideas", idea.id);
+        const voteRef = doc(getClientDb(), "ideas", idea.id, "votes", user.uid);
+
+        const voteSnap = await tx.get(voteRef);
+        if (voteSnap.exists()) {
           return;
         }
-        // Rollback on unexpected error
-        clearTimeout(timer);
-        setToastMessage(null);
-        setHasVoted(false);
-        setLocalVoteCount((prev) => Math.max(0, prev - 1));
-        throw new Error(data.error || "Failed to vote");
-      }
+
+        const ideaSnap = await tx.get(ideaRef);
+        if (!ideaSnap.exists()) throw new Error("Idea not found");
+
+        const currentVotes = (ideaSnap.data().voteCount as number) ?? 0;
+        tx.set(voteRef, { votedAt: Date.now() });
+        tx.update(ideaRef, { voteCount: currentVotes + 1 });
+      });
+
     } catch (err: unknown) {
+      console.error("Vote failed:", err);
+      // Rollback on unexpected error
+      clearTimeout(timer);
+      setToastMessage(null);
+      setHasVoted(false);
+      setLocalVoteCount((prev) => Math.max(0, prev - 1));
       const msg = err instanceof Error ? err.message : "";
-      if (msg !== "Already voted") {
-        console.error("Vote failed:", err);
-      }
+      alert(`Vote could not be recorded: ${msg || "Please try again"}`);
     } finally {
       setVoting(false);
-    }
-  };
-
-  const handleSaveEdit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!user || !isOwner || !editTitle.trim() || savingEdit) return;
-
-    setSavingEdit(true);
-    setEditError("");
-
-    try {
-      const ideaRef = doc(getClientDb(), "ideas", idea.id);
-      await updateDoc(ideaRef, {
-        title: editTitle.trim(),
-        body: editBody.trim(),
-        updatedAt: serverTimestamp(),
-      });
-
-      setIsEditing(false);
-      setToastMessage({
-        title: "Idea Updated!",
-        desc: "Your changes have been saved to the idea board.",
-      });
-
-      setTimeout(() => {
-        setToastMessage(null);
-      }, 3800);
-    } catch (err) {
-      console.error("Failed to update idea:", err);
-      setEditError("Failed to save changes. Please try again.");
-    } finally {
-      setSavingEdit(false);
     }
   };
 
@@ -174,7 +159,7 @@ export default function IdeaCard({ idea }: IdeaCardProps) {
     }
   };
 
-  const isVoteDisabled = voting || hasVoted === true || !user;
+  const isVoteDisabled = voting || hasVoted === true;
 
   return (
     <article className="idea-card" aria-label={`Idea: ${idea.title}`}>
@@ -233,89 +218,8 @@ export default function IdeaCard({ idea }: IdeaCardProps) {
 
       {/* Content */}
       <div className="idea-content">
-        {isEditing ? (
-          /* Inline Edit Form for Idea Author */
-          <form onSubmit={handleSaveEdit} className="idea-edit-form">
-            <div className="form-group" style={{ marginBottom: "0.5rem" }}>
-              <label
-                className="form-label"
-                htmlFor={`edit-title-${idea.id}`}
-                style={{ fontSize: "0.75rem" }}
-              >
-                Title
-              </label>
-              <input
-                id={`edit-title-${idea.id}`}
-                type="text"
-                className="form-input"
-                value={editTitle}
-                onChange={(e) => setEditTitle(e.target.value)}
-                maxLength={120}
-                required
-                disabled={savingEdit}
-                style={{ padding: "0.45rem 0.75rem", fontSize: "0.9rem" }}
-              />
-            </div>
-
-            <div className="form-group" style={{ marginBottom: "0.65rem" }}>
-              <label
-                className="form-label"
-                htmlFor={`edit-body-${idea.id}`}
-                style={{ fontSize: "0.75rem" }}
-              >
-                Description
-              </label>
-              <textarea
-                id={`edit-body-${idea.id}`}
-                className="form-textarea"
-                value={editBody}
-                onChange={(e) => setEditBody(e.target.value)}
-                maxLength={600}
-                rows={3}
-                disabled={savingEdit}
-                style={{ padding: "0.45rem 0.75rem", fontSize: "0.85rem" }}
-              />
-            </div>
-
-            {editError && (
-              <div
-                className="alert alert-error"
-                style={{ marginBottom: "0.5rem", padding: "0.4rem 0.75rem", fontSize: "0.8rem" }}
-              >
-                {editError}
-              </div>
-            )}
-
-            <div style={{ display: "flex", gap: "0.5rem" }}>
-              <button
-                type="submit"
-                className="btn btn-primary btn-sm"
-                disabled={savingEdit || !editTitle.trim()}
-              >
-                {savingEdit ? "Saving…" : "Save Changes"}
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={() => {
-                  setEditTitle(idea.title);
-                  setEditBody(idea.body ?? "");
-                  setIsEditing(false);
-                  setEditError("");
-                }}
-                disabled={savingEdit}
-              >
-                Cancel
-              </button>
-            </div>
-          </form>
-        ) : (
-          /* Standard View */
-          <>
-            <h3 className="idea-title">{idea.title}</h3>
-            {idea.body && <p className="idea-body">{idea.body}</p>}
-          </>
-        )}
+        <h3 className="idea-title">{idea.title}</h3>
+        {idea.body && <p className="idea-body">{idea.body}</p>}
 
         <div className="idea-meta">
           <span className="idea-author">by {idea.authorName}</span>
@@ -328,26 +232,25 @@ export default function IdeaCard({ idea }: IdeaCardProps) {
             <span className="badge badge-shipped">✓ Shipped</span>
           )}
 
-          {/* Actions for Author (Edit & Delete) */}
+          {/* Actions for Author (Delete) */}
           {isOwner && (
             <div className="idea-actions">
-              {!isEditing && (
-                <button
-                  id={`edit-btn-${idea.id}`}
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => setIsEditing(true)}
-                  disabled={deleting}
-                  aria-label="Edit your idea"
-                  style={{ padding: "0.25rem 0.65rem", fontSize: "0.78rem" }}
-                >
-                  Edit
-                </button>
-              )}
+              {/* Edit button commented out for now as requested
+              <button
+                id={`edit-btn-${idea.id}`}
+                className="btn btn-secondary btn-sm"
+                onClick={() => {}}
+                aria-label="Edit your idea"
+                style={{ padding: "0.25rem 0.65rem", fontSize: "0.78rem" }}
+              >
+                Edit
+              </button>
+              */}
               <button
                 id={`delete-btn-${idea.id}`}
                 className="btn btn-danger btn-sm"
                 onClick={handleDelete}
-                disabled={deleting || isEditing}
+                disabled={deleting}
                 aria-label="Delete your idea"
                 style={{ padding: "0.25rem 0.65rem", fontSize: "0.78rem" }}
               >
