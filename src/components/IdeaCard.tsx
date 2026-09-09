@@ -5,7 +5,11 @@ import {
   doc,
   deleteDoc,
   getDoc,
-  runTransaction,
+  setDoc,
+  updateDoc,
+  increment,
+  collection,
+  getCountFromServer,
 } from "firebase/firestore";
 import { getClientDb } from "@/lib/firebase-client";
 import { useAuth } from "@/context/AuthContext";
@@ -41,16 +45,26 @@ export default function IdeaCard({ idea }: IdeaCardProps) {
 
   const isOwner = user?.uid === idea.authorId;
 
-  // Keep local vote count in sync with real-time Firestore updates
-  useEffect(() => {
-    setLocalVoteCount(idea.voteCount);
-  }, [idea.voteCount]);
-
-  // Check if current user has already voted on this idea
+  // Sync vote count and check if current user has voted
   useEffect(() => {
     let isMounted = true;
+    const votesSubCol = collection(getClientDb(), "ideas", idea.id, "votes");
+
+    // Fetch accurate aggregate vote count from subcollection
+    getCountFromServer(votesSubCol)
+      .then((snap) => {
+        if (isMounted) {
+          const subCount = snap.data().count;
+          setLocalVoteCount((prev) => Math.max(prev, subCount, idea.voteCount));
+        }
+      })
+      .catch(() => {
+        if (isMounted) setLocalVoteCount(idea.voteCount);
+      });
+
+    // Check if current user has already voted on this idea
     if (user) {
-      const voteRef = doc(getClientDb(), "ideas", idea.id, "votes", user.uid);
+      const voteRef = doc(votesSubCol, user.uid);
       getDoc(voteRef)
         .then((snap) => {
           if (isMounted) {
@@ -63,10 +77,11 @@ export default function IdeaCard({ idea }: IdeaCardProps) {
     } else {
       setHasVoted(false);
     }
+
     return () => {
       isMounted = false;
     };
-  }, [idea.id, user?.uid]);
+  }, [idea.id, idea.voteCount, user?.uid]);
 
   const handleVote = async () => {
     // If user is not logged in, show prompt
@@ -96,40 +111,42 @@ export default function IdeaCard({ idea }: IdeaCardProps) {
 
     try {
       // 1. First attempt: Server API Route (Admin SDK)
-      const idToken = await user.getIdToken();
-      const res = await fetch(`/api/ideas/${idea.id}/vote`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${idToken}`,
-        },
-      });
+      try {
+        const idToken = await user.getIdToken();
+        const res = await fetch(`/api/ideas/${idea.id}/vote`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${idToken}`,
+          },
+        });
 
-      if (res.ok) {
-        return; // Success via Admin SDK
-      }
-
-      const data = await res.json().catch(() => ({}));
-      if (res.status === 409 || data.error === "Already voted") {
-        return; // Already voted is fine
-      }
-
-      // 2. Fallback: If server route fails (e.g. Vercel env not set yet), use direct client Firestore transaction
-      console.warn("API vote returned non-200, falling back to direct Firestore transaction...");
-      await runTransaction(getClientDb(), async (tx) => {
-        const ideaRef = doc(getClientDb(), "ideas", idea.id);
-        const voteRef = doc(getClientDb(), "ideas", idea.id, "votes", user.uid);
-
-        const voteSnap = await tx.get(voteRef);
-        if (voteSnap.exists()) {
-          return;
+        if (res.ok) {
+          return; // Success via Admin SDK
         }
 
-        const ideaSnap = await tx.get(ideaRef);
-        if (!ideaSnap.exists()) throw new Error("Idea not found");
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 409 || data.error === "Already voted") {
+          return; // Already voted is fine
+        }
+      } catch {
+        // Fall through to direct client write
+      }
 
-        const currentVotes = (ideaSnap.data().voteCount as number) ?? 0;
-        tx.set(voteRef, { votedAt: Date.now() });
-        tx.update(ideaRef, { voteCount: currentVotes + 1 });
+      // 2. Fallback: Save vote in votes subcollection (Allowed by Firestore rules)
+      const voteRef = doc(getClientDb(), "ideas", idea.id, "votes", user.uid);
+      const voteSnap = await getDoc(voteRef);
+      if (voteSnap.exists()) {
+        return;
+      }
+
+      await setDoc(voteRef, { votedAt: Date.now() });
+
+      // 3. Attempt incrementing the idea document's voteCount (optional convenience update)
+      const ideaRef = doc(getClientDb(), "ideas", idea.id);
+      updateDoc(ideaRef, { voteCount: increment(1) }).catch((err) => {
+        // Safe to ignore if console rules haven't been republished yet,
+        // because the vote document is already safely recorded!
+        console.warn("Direct voteCount increment on idea doc skipped:", err);
       });
 
     } catch (err: unknown) {
