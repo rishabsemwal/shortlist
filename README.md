@@ -8,7 +8,7 @@ A feature-voting board built with **Next.js 14 (App Router)**, **TypeScript**, *
 
 ## Live Demo
 
-[https://shortlist-ashy.vercel.app](https://shortlist-ashy.vercel.app)
+[https://shortlist-rishabh.vercel.app](https://shortlist-rishabh.vercel.app)
 
 ---
 

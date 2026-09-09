@@ -74,7 +74,7 @@ export default function SignInPage() {
       }
       if (message.includes("unauthorized-domain")) {
         setError(
-          "Domain not authorized. Please add shortlist-ashy.vercel.app to Firebase Console → Authentication → Settings → Authorized Domains."
+          "Domain not authorized. Please add shortlist-rishabh.vercel.app (or your current domain) to Firebase Console → Authentication → Settings → Authorized Domains."
         );
       } else {
         setError(message || "Authentication failed. Please try again.");
