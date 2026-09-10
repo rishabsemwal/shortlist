@@ -191,8 +191,8 @@ export default function IdeaCard({ idea }: IdeaCardProps) {
             !user
               ? "Sign in to vote"
               : hasVoted
-              ? "You have already upvoted this idea"
-              : "Upvote this idea"
+                ? "You have already upvoted this idea"
+                : "Upvote this idea"
           }
           aria-label={
             hasVoted
@@ -263,6 +263,7 @@ export default function IdeaCard({ idea }: IdeaCardProps) {
                 Edit
               </button>
               */}
+              {/* delete button for author   */}
               <button
                 id={`delete-btn-${idea.id}`}
                 className="btn btn-danger btn-sm"
