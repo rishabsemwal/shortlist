@@ -1,6 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { adminDb, adminAuth } from "@/lib/firebase-admin";
-import { FieldValue } from "firebase-admin/firestore";
 
 export const dynamic = "force-dynamic";
 
@@ -25,9 +23,26 @@ export async function POST(
     }
 
     const idToken = authHeader.split("Bearer ")[1];
+
+    // Lazily resolve Admin SDK instances at request time (not build time).
+    // getAdminFirestore() and getAdminAuthentication() use dynamic import()
+    // internally so firebase-admin is never loaded during Next.js build-time
+    // page data collection, which prevents the ERR_REQUIRE_ESM error from
+    // jose (a pure-ESM transitive dependency of firebase-admin/auth).
+    const { getAdminFirestore, getAdminAuthentication } = await import(
+      "@/lib/firebase-admin"
+    );
+    const [db, auth] = await Promise.all([
+      getAdminFirestore(),
+      getAdminAuthentication(),
+    ]);
+
+    // Also lazily import FieldValue to avoid bundling firebase-admin/firestore at build time
+    const { FieldValue } = await import("firebase-admin/firestore");
+
     let uid: string;
     try {
-      const decoded = await adminAuth.verifyIdToken(idToken);
+      const decoded = await auth.verifyIdToken(idToken);
       uid = decoded.uid;
     } catch {
       return NextResponse.json({ error: "Invalid token" }, { status: 401 });
@@ -38,10 +53,10 @@ export async function POST(
     }
 
     // 2. Atomic transaction: check existing vote → write vote doc → increment count
-    const ideaRef = adminDb.collection("ideas").doc(ideaId);
+    const ideaRef = db.collection("ideas").doc(ideaId);
     const voteRef = ideaRef.collection("votes").doc(uid);
 
-    await adminDb.runTransaction(async (tx: FirebaseFirestore.Transaction) => {
+    await db.runTransaction(async (tx: FirebaseFirestore.Transaction) => {
       const [ideaSnap, voteSnap] = await Promise.all([
         tx.get(ideaRef),
         tx.get(voteRef),

@@ -1,5 +1,6 @@
+export const runtime = "nodejs";
+
 import { NextRequest, NextResponse } from "next/server";
-import { adminDb } from "@/lib/firebase-admin";
 import { createHash } from "crypto";
 
 export const dynamic = "force-dynamic";
@@ -41,9 +42,15 @@ export async function POST(request: NextRequest) {
 
     // 3. Use hashed email as document ID — deterministic, no PII in doc IDs
     const emailHash = createHash("sha256").update(normalizedEmail).digest("hex");
-    const docRef = adminDb.collection("waitlist").doc(emailHash);
 
-    // 4. Check for duplicate
+    // 4. Lazily resolve the Admin Firestore instance at request time.
+    //    getAdminFirestore() uses dynamic import() internally so firebase-admin
+    //    is never loaded during Next.js build-time page data collection.
+    const { getAdminFirestore } = await import("@/lib/firebase-admin");
+    const db = await getAdminFirestore();
+    const docRef = db.collection("waitlist").doc(emailHash);
+
+    // 5. Check for duplicate
     const existing = await docRef.get();
     if (existing.exists) {
       return NextResponse.json(
@@ -52,7 +59,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 5. Write via Admin SDK — Firestore rules block all client access to this collection
+    // 6. Write via Admin SDK — Firestore rules block all client access to this collection
     await docRef.set({
       email: normalizedEmail,
       joinedAt: Date.now(),
